@@ -23,5 +23,5 @@ jobs:
         uses: wangyoucao577/go-release-action@v1.53
         with:
           go_version: '1.23'
-          build_command: 'go build -v -ldflags=-extldflags=-lm -o BwKeySync ./main.go'
+          build_command: 'go build -v -ldflags=-extldflags=-lm -o ./build-artifacts/BwKeySync ./main.go'
           asset_name: 'BwKeySync-${{ matrix.goos }}-${{ matrix.goarch }}'
