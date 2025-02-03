@@ -1,0 +1,322 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/bitwarden/sdk-go"
+	"github.com/natefinch/lumberjack"
+	"github.com/sirupsen/logrus"
+)
+
+var logger = logrus.New()
+
+func initLogger() {
+	// Configure log rotation
+	logger.SetOutput(&lumberjack.Logger{
+		Filename:   "bwkeysync.log",
+		MaxSize:    10, // megabytes
+		MaxBackups: 3,
+		MaxAge:     30, // days
+		Compress:   true,
+	})
+
+	// Set log level from environment variable
+	switch os.Getenv("LOG_LEVEL") {
+	case "debug":
+		logger.SetLevel(logrus.DebugLevel)
+	case "warn":
+		logger.SetLevel(logrus.WarnLevel)
+	case "error":
+		logger.SetLevel(logrus.ErrorLevel)
+	default:
+		logger.SetLevel(logrus.InfoLevel)
+	}
+
+	// Use JSON format for structured logging
+	logger.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: "2006-01-02 15:04:05",
+	})
+}
+
+// getEnv retrieves an environment variable and returns an error if not present
+func getEnv(key string) (string, error) {
+	if value, ok := os.LookupEnv(key); ok && value != "" {
+		return value, nil
+	}
+	return "", fmt.Errorf("environment variable %s not set", key)
+}
+
+// fetchPublicKey fetches the public key from Bitwarden Secrets Manager using the SDK
+func fetchPublicKey(serverURL, secretID, accessToken string) (string, error) {
+	apiURL := serverURL + "/api"
+	identityURL := serverURL + "/identity"
+
+	bitwardenClient, err := sdk.NewBitwardenClient(&apiURL, &identityURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to create Bitwarden client: %w", err)
+	}
+	defer bitwardenClient.Close()
+
+	stateFile := os.Getenv("STATE_FILE")
+	if stateFile == "" {
+		stateFile = ".bitwarden_state"
+	}
+
+	err = bitwardenClient.AccessTokenLogin(accessToken, &stateFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to authenticate with Bitwarden: %w", err)
+	}
+
+	secret, err := bitwardenClient.Secrets().Get(secretID)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch secret: %w", err)
+	}
+
+	key := strings.TrimSpace(secret.Value)
+	if key == "" {
+		return "", errors.New("empty public key received")
+	}
+
+	return key, nil
+}
+
+// authorizedKeysPath returns the path to the authorized_keys file based on sshUser
+func authorizedKeysPath(sshUser string) string {
+	if sshUser == "root" {
+		return "/root/.ssh/authorized_keys"
+	}
+	// Assuming typical Linux home directory structure
+	return filepath.Join("/home", sshUser, ".ssh", "authorized_keys")
+}
+
+// keyExists checks if the public key is already in the authorized_keys file
+func keyExists(filePath, publicKey string) (bool, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == publicKey {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ensureKeyInAuthorizedKeys appends the public key to authorized_keys if not already present
+func ensureKeyInAuthorizedKeys(filePath, publicKey string) error {
+	logger := logger.WithFields(logrus.Fields{
+		"filePath": filePath,
+		"key":     publicKey,
+	})
+
+	logger.Debug("Checking if key exists in authorized_keys")
+	exists, err := keyExists(filePath, publicKey)
+	if err != nil {
+		logger.WithError(err).Error("Failed to check key existence")
+		return err
+	}
+
+	if exists {
+		logger.Info("Public key is already present in authorized_keys")
+		return nil
+	}
+
+	logger.Debug("Key not found, adding to authorized_keys")
+
+	// Ensure the directory exists
+	dir := filepath.Dir(filePath)
+	err = os.MkdirAll(dir, 0700)
+	if err != nil {
+		logger.WithError(err).Error("Failed to create directory")
+		return err
+	}
+
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		logger.WithError(err).Error("Failed to open authorized_keys file")
+		return err
+	}
+	defer f.Close()
+
+	// Append with a newline if needed
+	if _, err := f.WriteString(publicKey + "\n"); err != nil {
+		logger.WithError(err).Error("Failed to write to authorized_keys file")
+		return err
+	}
+
+	logger.Info("Public key added to authorized_keys")
+	return nil
+}
+
+const (
+	maxRetries       = 3
+	initialBackoff   = 1 * time.Second
+	maxBackoff       = 30 * time.Second
+	backoffMultiplier = 2.0
+	jitterFactor      = 0.1
+)
+
+type ErrorCode int
+
+const (
+	ErrAuthFailed ErrorCode = iota + 1
+	ErrNetworkError
+	ErrInvalidResponse
+	ErrFileSystemError
+	ErrMaxRetriesExceeded
+)
+
+type SyncError struct {
+	Code    ErrorCode
+	Message string
+	Err     error
+}
+
+func (e *SyncError) Error() string {
+	return fmt.Sprintf("[%d] %s: %v", e.Code, e.Message, e.Err)
+}
+
+func withRetry(fn func() error, operation string) error {
+	var lastErr error
+	backoff := initialBackoff
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		
+		lastErr = err
+		logger.WithFields(logrus.Fields{
+			"attempt": attempt,
+			"operation": operation,
+			"backoff": backoff.String(),
+		}).Warn("Operation failed, retrying")
+		
+		if attempt < maxRetries {
+			time.Sleep(backoff)
+			backoff = time.Duration(float64(backoff) * backoffMultiplier)
+			
+			jitter := time.Duration(float64(backoff) * jitterFactor)
+			if attempt%2 == 0 {
+				backoff += jitter
+			} else {
+				backoff -= jitter
+			}
+			
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+	
+	return &SyncError{
+		Code:    ErrMaxRetriesExceeded,
+		Message: fmt.Sprintf("Max retries (%d) exceeded for operation: %s", maxRetries, operation),
+		Err:     lastErr,
+	}
+}
+
+func main() {
+	initLogger()
+	logger.Info("Starting Bitwarden Key Sync")
+
+	interval := flag.Duration("interval", 10*time.Minute, "Interval between public key fetches (in minutes)")
+	flag.Parse()
+
+	logger.WithFields(logrus.Fields{
+		"interval": interval.String(),
+	}).Info("Configuration loaded")
+
+	// Set up signal handling for graceful shutdown
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	// Run the first fetch immediately
+	if err := fetchAndUpdate(); err != nil {
+		logger.WithError(err).Fatal("Initial fetch failed")
+	}
+
+	logger.Info("Initial key sync completed successfully")
+
+	// Set up ticker for interval-based fetching
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+
+	logger.Info("Starting interval-based sync")
+	for {
+		select {
+		case <-ticker.C:
+			logger.Debug("Starting scheduled key sync")
+			if err := fetchAndUpdate(); err != nil {
+				logger.WithError(err).Error("Failed to fetch and update")
+			} else {
+				logger.Info("Key sync completed successfully")
+			}
+		case <-sigs:
+			logger.Info("Received shutdown signal, exiting...")
+			return
+		}
+	}
+}
+
+func fetchAndUpdate() error {
+	return withRetry(func() error {
+		logger.Debug("Starting fetch and update process")
+		
+		secretID, err := getEnv("BW_SECRET_ID")
+		if err != nil {
+			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SECRET_ID", Err: err}
+		}
+		
+		token, err := getEnv("BW_ACCESS_TOKEN")
+		if err != nil {
+			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_ACCESS_TOKEN", Err: err}
+		}
+		
+		serverURL, err := getEnv("BW_SERVER_URL")
+		if err != nil {
+			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SERVER_URL", Err: err}
+		}
+		
+		sshUser, err := getEnv("BW_SSH_USER")
+		if err != nil {
+			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SSH_USER", Err: err}
+		}
+		
+		logger.WithFields(logrus.Fields{
+			"secretID":  secretID,
+			"serverURL": serverURL,
+			"sshUser":   sshUser,
+		}).Debug("Environment variables loaded")
+		
+		logger.Debug("Fetching public key from Bitwarden")
+		publicKey, err := fetchPublicKey(serverURL, secretID, token)
+		if err != nil {
+			return &SyncError{Code: ErrNetworkError, Message: "Failed to fetch public key", Err: err}
+		}
+		
+		logger.Debug("Public key fetched successfully")
+		
+		authKeysPath := authorizedKeysPath(sshUser)
+		
+		logger.WithField("authKeysPath", authKeysPath).Debug("Authorized keys path resolved")
+		
+		logger.Debug("Ensuring public key is present in authorized_keys")
+		return ensureKeyInAuthorizedKeys(authKeysPath, publicKey)
+	}, "fetchAndUpdate")
+}

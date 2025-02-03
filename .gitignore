@@ -1,0 +1,12 @@
+# CI/CD
+.idea/
+.vscode/
+
+# Binaries
+bwkeysync
+
+# Docker
+.dockerignore
+
+# Logs
+*.log
