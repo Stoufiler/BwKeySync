@@ -33,12 +33,8 @@ jobs:
       - name: Install ARM64 build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu musl-tools
 
-      - name: Set up cross compilation environment
-        run: |
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CGO_ENABLED=1" >> $GITHUB_ENV
       - name: Go Release Binaries
         uses: wangyoucao577/go-release-action@v1.53
         with:
@@ -47,4 +43,4 @@ jobs:
           goos: 'linux'
           goarch: 'arm64'
           ldflags: '-extldflags=-lm'
-          pre_command: 'export CC=aarch64-linux-gnu-gcc CGO_ENABLED=1'
+          pre_command: 'export CC=musl-gcc CGO_ENABLED=1'
