@@ -9,12 +9,8 @@ permissions:
     packages: write
 
 jobs:
-  build:
+  release-linux-amd64:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux]
-        goarch: [amd64, arm64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,6 +19,20 @@ jobs:
         uses: wangyoucao577/go-release-action@v1.53
         with:
           go_version: '1.23'
+          goos: 'linux'
+          goarch: 'amd64'
           ldflags: '-extldflags=-lm'
-          build_command: 'go build -v -o ./build-artifacts/BwKeySync ./main.go'
-          asset_name: 'BwKeySync-${{ matrix.goos }}-${{ matrix.goarch }}'
+
+  release-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Go Release Binaries
+        uses: wangyoucao577/go-release-action@v1.53
+        with:
+          go_version: '1.23'
+          goos: 'linux'
+          goarch: 'arm64'
+          ldflags: '-extldflags=-lm'
