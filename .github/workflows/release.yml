@@ -15,7 +15,9 @@ jobs:
         goarch: [amd64, arm64, 386]
         exclude:
           - goos: darwin
-            goarch: [amd64_v1, 386]
+            goarch: amd64_v1
+          - goos: darwin
+            goarch: 386
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
