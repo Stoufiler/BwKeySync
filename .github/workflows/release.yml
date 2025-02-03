@@ -37,7 +37,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist/${GOOS}_${GOARCH}
-          go build -v -o dist/${GOOS}_${GOARCH}/BwKeySync ./cmd/main.go
+          go build -v -o dist/${GOOS}_${GOARCH}/BwKeySync ./main.go
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
