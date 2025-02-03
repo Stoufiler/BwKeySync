@@ -33,6 +33,7 @@ jobs:
       - name: Build BwKeySync
         env:
           CGO_ENABLED: 1  # Activer CGO pour la compatibilité C
+          CGO_LDFLAGS: "-lm"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
