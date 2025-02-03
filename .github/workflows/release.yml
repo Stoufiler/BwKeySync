@@ -43,4 +43,4 @@ jobs:
           goos: 'linux'
           goarch: 'arm64'
           ldflags: '-extldflags=-lm'
-          pre_command: 'export CC=aarch64-linux-gnu-gcc'
+          pre_command: 'export CC=aarch64-linux-gnu-gcc CGO_ENABLED=1'
