@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -118,47 +119,44 @@ func keyExists(filePath, publicKey string) (bool, error) {
 
 // ensureKeyInAuthorizedKeys appends the public key to authorized_keys if not already present
 func ensureKeyInAuthorizedKeys(filePath, publicKey string) error {
-	logger := logger.WithFields(logrus.Fields{
-		"filePath": filePath,
-		"key":     publicKey,
-	})
+	entry := logger.WithField("filePath", filePath)
 
-	logger.Debug("Checking if key exists in authorized_keys")
+	entry.Debug("Checking if key exists in authorized_keys")
 	exists, err := keyExists(filePath, publicKey)
 	if err != nil {
-		logger.WithError(err).Error("Failed to check key existence")
+		entry.WithError(err).Error("Failed to check key existence")
 		return err
 	}
 
 	if exists {
-		logger.Info("Public key is already present in authorized_keys")
+		entry.Info("Public key is already present in authorized_keys")
 		return nil
 	}
 
-	logger.Debug("Key not found, adding to authorized_keys")
+	entry.Debug("Key not found, adding to authorized_keys")
 
 	// Ensure the directory exists
 	dir := filepath.Dir(filePath)
 	err = os.MkdirAll(dir, 0700)
 	if err != nil {
-		logger.WithError(err).Error("Failed to create directory")
+		entry.WithError(err).Error("Failed to create directory")
 		return err
 	}
 
 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		logger.WithError(err).Error("Failed to open authorized_keys file")
+		entry.WithError(err).Error("Failed to open authorized_keys file")
 		return err
 	}
 	defer f.Close()
 
 	// Append with a newline if needed
 	if _, err := f.WriteString(publicKey + "\n"); err != nil {
-		logger.WithError(err).Error("Failed to write to authorized_keys file")
+		entry.WithError(err).Error("Failed to write to authorized_keys file")
 		return err
 	}
 
-	logger.Info("Public key added to authorized_keys")
+	entry.Info("Public key added to authorized_keys")
 	return nil
 }
 
@@ -231,7 +229,8 @@ func withRetry(fn func() error, operation string) error {
 	}
 }
 
-func main() {
+// Run starts the application
+func Run() error {
 	initLogger()
 	logger.Info("Starting Bitwarden Key Sync")
 
@@ -248,28 +247,22 @@ func main() {
 
 	// Run the first fetch immediately
 	if err := fetchAndUpdate(); err != nil {
-		logger.WithError(err).Fatal("Initial fetch failed")
+		return err
 	}
 
-	logger.Info("Initial key sync completed successfully")
-
-	// Set up ticker for interval-based fetching
+	// Start the periodic fetch loop
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
-	logger.Info("Starting interval-based sync")
 	for {
 		select {
 		case <-ticker.C:
-			logger.Debug("Starting scheduled key sync")
 			if err := fetchAndUpdate(); err != nil {
-				logger.WithError(err).Error("Failed to fetch and update")
-			} else {
-				logger.Info("Key sync completed successfully")
+				return err
 			}
 		case <-sigs:
-			logger.Info("Received shutdown signal, exiting...")
-			return
+			logger.Info("Shutting down")
+			return nil
 		}
 	}
 }
@@ -319,4 +312,10 @@ func fetchAndUpdate() error {
 		logger.Debug("Ensuring public key is present in authorized_keys")
 		return ensureKeyInAuthorizedKeys(authKeysPath, publicKey)
 	}, "fetchAndUpdate")
+}
+
+func main() {
+	if err := Run(); err != nil {
+		log.Fatal(err)
+	}
 }

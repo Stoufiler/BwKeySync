@@ -4,6 +4,7 @@
 
 # Binaries
 bwkeysync
+bin/
 
 # Docker
 .dockerignore
