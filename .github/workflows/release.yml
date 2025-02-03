@@ -19,7 +19,7 @@ jobs:
         uses: wangyoucao577/go-release-action@v1.53
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          go_version: '1.23'
+          goversion: '1.23'
           goos: 'linux'
           goarch: 'amd64'
           ldflags: '-extldflags=-lm'
@@ -39,7 +39,8 @@ jobs:
         uses: wangyoucao577/go-release-action@v1.53
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          go_version: '1.23'
+          goversion: '1.23'
           goos: 'linux'
           goarch: 'arm64'
           ldflags: '-extldflags=-lm'
+          build_command: 'CC=aarch64-linux-gnu-gcc go build -o ./build-artifacts/BwKeySync ./main.go'
