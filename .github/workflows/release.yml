@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         goos: [linux, darwin]
-        goarch: [amd64, arm64, 386]
+        goarch: [amd64, arm64]
         exclude:
           - goos: darwin
             goarch: amd64_v1
@@ -48,7 +48,7 @@ jobs:
             export CC=aarch64-linux-gnu-gcc
           fi
           mkdir -p dist/${GOOS}_${GOARCH}
-          go build -v -o dist/${GOOS}_${GOARCH}/BwKeySync ./main.go
+          go build -v -ldflags="-extldflags=-lm" -o dist/${GOOS}_${GOARCH}/BwKeySync ./main.go
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
