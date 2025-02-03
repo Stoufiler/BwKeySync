@@ -15,7 +15,7 @@ jobs:
         goarch: [amd64, arm64, 386]
         exclude:
           - goos: darwin
-            goarch: amd64_v1
+            goarch: [amd64_v1, 386]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version: '1.23'
 
       - name: Install build dependencies
         run: |
