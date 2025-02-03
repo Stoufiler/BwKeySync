@@ -35,12 +35,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu musl-tools
 
-      - name: Go Release Binaries
-        uses: wangyoucao577/go-release-action@v1.53
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          goversion: '1.23'
-          goos: 'linux'
-          goarch: 'arm64'
-          ldflags: '-extldflags=-lm'
-          pre_command: 'export CC=musl-gcc CGO_ENABLED=1'
+      - name: Build release with musl-tools
+        run: |
+          export CC=musl-gcc
+          export CGO_ENABLED=1
+          go build -v -ldflags="-s -w" -o BwKeySync .
