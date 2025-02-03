@@ -26,6 +26,9 @@ jobs:
 
   release-linux-arm64:
     runs-on: ubuntu-latest
+    env:
+      GOOS: linux
+      GOARCH: arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,11 +38,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu musl-tools
 
-      - name: Build release with musl-tools
+      - name: Build release
         run: |
           export CC=aarch64-linux-gnu-gcc
           export CGO_ENABLED=1
-          export GOOS=linux
-          export GOARCH=arm64
           export CGO_CFLAGS="-g -O2"
           go build -v -ldflags '-extldflags=-lm' -o BwKeySync .
+
+      - name: Package release
+        run: |
+          mkdir -p release
+          tar -czvf "release/BwKeySync-${{ github.ref_name }}-${GOOS}-${GOARCH}.tar.gz" BwKeySync
+          md5sum "release/BwKeySync-${{ github.ref_name }}-${GOOS}-${GOARCH}.tar.gz" > "release/BwKeySync-${{ github.ref_name }}-${GOOS}-${GOARCH}.tar.gz.md5"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/BwKeySync-${{ github.ref_name }}-${{ env.GOOS }}-${{ env.GOARCH }}.tar.gz
+            release/BwKeySync-${{ github.ref_name }}-${{ env.GOOS }}-${{ env.GOARCH }}.tar.gz.md5
