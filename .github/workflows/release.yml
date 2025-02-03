@@ -22,7 +22,7 @@ jobs:
           goversion: '1.23'
           goos: 'linux'
           goarch: 'amd64'
-          ldflags: '-extldflags="-static -lm"'
+          ldflags: '-extldflags=-lm'
 
   release-linux-arm64:
     runs-on: ubuntu-latest
@@ -41,4 +41,4 @@ jobs:
           export CGO_ENABLED=1
           export GOOS=linux
           export GOARCH=arm64
-          go build -v -ldflags="-s -w" -o BwKeySync .
+          go build -v -ldflags '-linkmode external -extldflags "-static -Wl,-unresolved-symbols=ignore-all"' -o BwKeySync .
