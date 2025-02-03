@@ -6,7 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty)
 COMMIT ?= $(shell git rev-parse --short HEAD)
 DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-.PHONY: build test clean lint run install uninstall mod deps vet
+.PHONY: build test clean lint run install uninstall mod deps vet release release-snapshot check-goreleaser
 
 # Build the application
 build:
