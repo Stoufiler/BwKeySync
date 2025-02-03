@@ -45,8 +45,16 @@ jobs:
           mkdir -p dist/${GOOS}_${GOARCH}
           go build -v -ldflags="-extldflags=-lm" -o dist/${GOOS}_${GOARCH}/BwKeySync ./main.go
 
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+          - name: Upload Build Artifacts
+          uses: actions/upload-artifact@v4
+          with:
+            name: BwKeySync-${{ matrix.goos }}-${{ matrix.goarch }}
+            path: dist/${{ matrix.goos }}_${{ matrix.goarch }}/
+  
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          name: BwKeySync-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/${{ matrix.goos }}_${{ matrix.goarch }}/
+          files: dist/${{ matrix.goos }}_${{ matrix.goarch }}/BwKeySync
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
