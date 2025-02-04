@@ -99,34 +99,39 @@ func authorizedKeysPath(sshUser string) string {
 }
 
 // keyExists checks if the public key is already in the authorized_keys file
-func keyExists(filePath, publicKey string) (bool, error) {
-	content, err := os.ReadFile(filePath)
+func keyExists(comment string, bitwardenKey string, filePath string) error {
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to read file %s: %w", filePath, err)
+		return err
 	}
-
-	// Extract comment from new key
-	newParts := strings.Fields(publicKey)
-	if len(newParts) < 3 {
-		return false, fmt.Errorf("malformed public key")
-	}
-	newComment := strings.Join(newParts[2:], " ")
-
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		parts := strings.Fields(strings.TrimSpace(line))
-		if len(parts) < 3 {
-			continue
-		}
-		existingComment := strings.Join(parts[2:], " ")
-		if parts[0] == newParts[0] && parts[1] == newParts[1] && existingComment == newComment {
-			return true, nil
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		if strings.Contains(line, comment) {
+			found = true
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				existingKey := strings.TrimSpace(parts[1])
+				if existingKey != bitwardenKey {
+					// Replace the existing key with the Bitwarden key
+					lines[i] = parts[0] + ": " + bitwardenKey
+				}
+			} else {
+				// In unexpected format, override the line
+				lines[i] = comment + ": " + bitwardenKey
+			}
+			break
 		}
 	}
-	return false, nil
+	if !found {
+		// Append new key line if comment is not found
+		lines = append(lines, comment+": "+bitwardenKey)
+	}
+	newData := strings.Join(lines, "\n")
+	if err = os.WriteFile(filePath, []byte(newData), 0600); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ensureKeyInAuthorizedKeys appends the public key to authorized_keys if not already present
@@ -134,48 +139,23 @@ func ensureKeyInAuthorizedKeys(filePath, publicKey string) error {
 	entry := logger.WithField("filePath", filePath)
 
 	entry.Debug("Checking if key exists in authorized_keys")
-	exists, err := keyExists(filePath, publicKey)
-	if err != nil {
+	newParts := strings.Fields(publicKey)
+	if len(newParts) < 3 {
+		return fmt.Errorf("malformed public key")
+	}
+	newComment := strings.Join(newParts[2:], " ")
+	if err := keyExists(newComment, publicKey, filePath); err != nil {
 		entry.WithError(err).Error("Failed to check key existence")
 		return err
 	}
 
-	if exists {
-		entry.Info("Public key is already present in authorized_keys")
-		return nil
-	}
-
-	entry.Debug("Key not found, adding to authorized_keys")
-
-	// Ensure the directory exists
-	dir := filepath.Dir(filePath)
-	err = os.MkdirAll(dir, 0700)
-	if err != nil {
-		entry.WithError(err).Error("Failed to create directory")
-		return err
-	}
-
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		entry.WithError(err).Error("Failed to open authorized_keys file")
-		return err
-	}
-	defer f.Close()
-
-	// Append with a newline if needed
-	if _, err := f.WriteString(publicKey + "\n"); err != nil {
-		entry.WithError(err).Error("Failed to write to authorized_keys file")
-		return err
-	}
-
-	entry.Info("Public key added to authorized_keys")
 	return nil
 }
 
 const (
-	maxRetries       = 3
-	initialBackoff   = 1 * time.Second
-	maxBackoff       = 30 * time.Second
+	maxRetries        = 3
+	initialBackoff    = 1 * time.Second
+	maxBackoff        = 30 * time.Second
 	backoffMultiplier = 2.0
 	jitterFactor      = 0.1
 )
@@ -203,37 +183,37 @@ func (e *SyncError) Error() string {
 func withRetry(fn func() error, operation string) error {
 	var lastErr error
 	backoff := initialBackoff
-	
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		err := fn()
 		if err == nil {
 			return nil
 		}
-		
+
 		lastErr = err
 		logger.WithFields(logrus.Fields{
-			"attempt": attempt,
+			"attempt":   attempt,
 			"operation": operation,
-			"backoff": backoff.String(),
+			"backoff":   backoff.String(),
 		}).Warn("Operation failed, retrying")
-		
+
 		if attempt < maxRetries {
 			time.Sleep(backoff)
 			backoff = time.Duration(float64(backoff) * backoffMultiplier)
-			
+
 			jitter := time.Duration(float64(backoff) * jitterFactor)
 			if attempt%2 == 0 {
 				backoff += jitter
 			} else {
 				backoff -= jitter
 			}
-			
+
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
 		}
 	}
-	
+
 	return &SyncError{
 		Code:    ErrMaxRetriesExceeded,
 		Message: fmt.Sprintf("Max retries (%d) exceeded for operation: %s", maxRetries, operation),
@@ -282,45 +262,45 @@ func Run() error {
 func fetchAndUpdate() error {
 	return withRetry(func() error {
 		logger.Debug("Starting fetch and update process")
-		
+
 		secretID, err := getEnv("BW_SECRET_ID")
 		if err != nil {
 			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SECRET_ID", Err: err}
 		}
-		
+
 		token, err := getEnv("BW_ACCESS_TOKEN")
 		if err != nil {
 			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_ACCESS_TOKEN", Err: err}
 		}
-		
+
 		serverURL, err := getEnv("BW_SERVER_URL")
 		if err != nil {
 			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SERVER_URL", Err: err}
 		}
-		
+
 		sshUser, err := getEnv("BW_SSH_USER")
 		if err != nil {
 			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SSH_USER", Err: err}
 		}
-		
+
 		logger.WithFields(logrus.Fields{
 			"secretID":  secretID,
 			"serverURL": serverURL,
 			"sshUser":   sshUser,
 		}).Debug("Environment variables loaded")
-		
+
 		logger.Debug("Fetching public key from Bitwarden")
 		publicKey, err := fetchPublicKey(serverURL, secretID, token)
 		if err != nil {
 			return &SyncError{Code: ErrNetworkError, Message: "Failed to fetch public key", Err: err}
 		}
-		
+
 		logger.Debug("Public key fetched successfully")
-		
+
 		authKeysPath := authorizedKeysPath(sshUser)
-		
+
 		logger.WithField("authKeysPath", authKeysPath).Debug("Authorized keys path resolved")
-		
+
 		logger.Debug("Ensuring public key is present in authorized_keys")
 		return ensureKeyInAuthorizedKeys(authKeysPath, publicKey)
 	}, "fetchAndUpdate")
