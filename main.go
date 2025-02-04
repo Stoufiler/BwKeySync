@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -98,58 +99,60 @@ func authorizedKeysPath(sshUser string) string {
 	return filepath.Join("/home", sshUser, ".ssh", "authorized_keys")
 }
 
-// keyExists checks if the public key is already in the authorized_keys file
-func keyExists(comment string, bitwardenKey string, filePath string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
+// ensureKeyInAuthorizedKeys appends the public key to authorized_keys if not already present
+func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) error {
+	// Read existing authorized_keys file
+	file, err := os.Open(authorizedKeysPath)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	lines := strings.Split(string(data), "\n")
-	found := false
-	for i, line := range lines {
-		if strings.Contains(line, comment) {
-			found = true
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				existingKey := strings.TrimSpace(parts[1])
-				if existingKey != bitwardenKey {
-					// Replace the existing key with the Bitwarden key
-					lines[i] = parts[0] + ": " + bitwardenKey
-				}
-			} else {
-				// In unexpected format, override the line
-				lines[i] = comment + ": " + bitwardenKey
-			}
-			break
+
+	var existingLines []string
+	if file != nil {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			existingLines = append(existingLines, scanner.Text())
+		}
+		file.Close()
+	}
+
+	// Parse Bitwarden key and comment
+	bitwardenParts := strings.Split(bitwardenKey, " ")
+	bitwardenComment := ""
+	if len(bitwardenParts) > 2 {
+		bitwardenComment = strings.Join(bitwardenParts[2:], " ")
+	}
+
+	// Process existing lines
+	var newLines []string
+	keyExists := false
+	for _, line := range existingLines {
+		if line == bitwardenKey {
+			// Exact match, keep as is
+			newLines = append(newLines, line)
+			keyExists = true
+			continue
+		}
+
+		// Check if comment matches
+		parts := strings.Split(line, " ")
+		if len(parts) > 2 && strings.Join(parts[2:], " ") == bitwardenComment {
+			// Comment matches but key differs, replace with Bitwarden key
+			newLines = append(newLines, bitwardenKey)
+			keyExists = true
+		} else {
+			// Keep original line
+			newLines = append(newLines, line)
 		}
 	}
-	if !found {
-		// Append new key line if comment is not found
-		lines = append(lines, comment+": "+bitwardenKey)
-	}
-	newData := strings.Join(lines, "\n")
-	if err = os.WriteFile(filePath, []byte(newData), 0600); err != nil {
-		return err
-	}
-	return nil
-}
 
-// ensureKeyInAuthorizedKeys appends the public key to authorized_keys if not already present
-func ensureKeyInAuthorizedKeys(filePath, publicKey string) error {
-	entry := logger.WithField("filePath", filePath)
-
-	entry.Debug("Checking if key exists in authorized_keys")
-	newParts := strings.Fields(publicKey)
-	if len(newParts) < 3 {
-		return fmt.Errorf("malformed public key")
-	}
-	newComment := strings.Join(newParts[2:], " ")
-	if err := keyExists(newComment, publicKey, filePath); err != nil {
-		entry.WithError(err).Error("Failed to check key existence")
-		return err
+	// If key doesn't exist, append it
+	if !keyExists {
+		newLines = append(newLines, bitwardenKey)
 	}
 
-	return nil
+	// Write updated file
+	return os.WriteFile(authorizedKeysPath, []byte(strings.Join(newLines, "\n")), 0600)
 }
 
 const (
