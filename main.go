@@ -126,10 +126,14 @@ func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) e
 	// Process existing lines
 	var newLines []string
 	keyExists := false
+	seenKeys := make(map[string]bool)
+
 	for _, line := range existingLines {
 		if line == bitwardenKey {
-			// Exact match, keep as is
-			newLines = append(newLines, line)
+			if !seenKeys[line] {
+				newLines = append(newLines, line)
+				seenKeys[line] = true
+			}
 			keyExists = true
 			continue
 		}
@@ -137,12 +141,16 @@ func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) e
 		// Check if comment matches
 		parts := strings.Split(line, " ")
 		if len(parts) > 2 && strings.Join(parts[2:], " ") == bitwardenComment {
-			// Comment matches but key differs, replace with Bitwarden key
-			newLines = append(newLines, bitwardenKey)
+			if !seenKeys[bitwardenKey] {
+				newLines = append(newLines, bitwardenKey)
+				seenKeys[bitwardenKey] = true
+			}
 			keyExists = true
 		} else {
-			// Keep original line
-			newLines = append(newLines, line)
+			if !seenKeys[line] {
+				newLines = append(newLines, line)
+				seenKeys[line] = true
+			}
 		}
 	}
 
