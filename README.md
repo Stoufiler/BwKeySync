@@ -26,6 +26,51 @@ go build -o bwkeysync
 ### Options
 - `--interval`: Time between key syncs (default: 10m)
 
+## Running as a Service
+
+To run BwKeySync as a service and start it at boot with an interval of 30 minutes, follow these steps:
+
+1. Create a service file:
+
+```bash
+sudo nano /etc/systemd/system/bwkeysync.service
+```
+
+2. Add the following content to the service file:
+
+```ini
+[Unit]
+Description=BwKeySync Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/bwkeysync --interval 30m
+Restart=always
+RestartSec=30m
+
+[Install]
+WantedBy=multi-user.target
+```
+
+3. Reload the systemd daemon and enable the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable bwkeysync.service
+```
+
+4. Start the service:
+
+```bash
+sudo systemctl start bwkeysync.service
+```
+
+5. Check the status of the service:
+
+```bash
+sudo systemctl status bwkeysync.service
+```
+
 ## How It Works ⚙️
 1. The application fetches the public key from Bitwarden Secrets Manager
 2. Checks if the key exists in the user's authorized_keys file
