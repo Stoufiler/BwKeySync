@@ -32,6 +32,9 @@ go build -o bwkeysync
 3. If not present, appends the key to the file
 4. Repeats this process at the specified interval
 
+## Important Note
+⚠️ **Warning:** The script identifies existing keys by their **comment portion** (typically the last part of the key). This means that keys with identical comments will be considered duplicates, and changing a key's comment will be treated as a new key. Modifying key material while keeping the same comment will be detected as an update.
+
 ## CI/CD Pipeline 🚀
 
 This project uses GitHub Actions for:

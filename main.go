@@ -108,9 +108,21 @@ func keyExists(filePath, publicKey string) (bool, error) {
 		return false, fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 
+	// Extract comment from new key
+	newParts := strings.Fields(publicKey)
+	if len(newParts) < 3 {
+		return false, fmt.Errorf("malformed public key")
+	}
+	newComment := strings.Join(newParts[2:], " ")
+
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
-		if strings.TrimSpace(line) == publicKey {
+		parts := strings.Fields(strings.TrimSpace(line))
+		if len(parts) < 3 {
+			continue
+		}
+		existingComment := strings.Join(parts[2:], " ")
+		if existingComment == newComment {
 			return true, nil
 		}
 	}
