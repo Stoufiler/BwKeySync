@@ -85,36 +85,12 @@ sudo systemctl status bwkeysync.service
 This project uses GitHub Actions for:
 - Automated testing on every push/pull request
 - Building the application
-- Creating and publishing Docker images
-
-### Docker Deployment 🐳
-
-To build and run the Docker container:
-
-```bash
-# Build the image
-docker build -t bwkeysync .
-
-# Run the container
-docker run -d \
-  -e BW_SECRET_ID=your_secret_id \
-  -e BW_ACCESS_TOKEN=your_access_token \
-  -e BW_SERVER_URL=your_server_url \
-  -e BW_SSH_USER=your_ssh_user \
-  --name bwkeysync \
-  bwkeysync --interval 10m
-```
 
 ### GitHub Actions
 
 The CI/CD pipeline includes:
 1. Unit testing
 2. Building the application
-3. Docker image creation and publishing
-
-To use the Docker Hub integration, set these secrets in your GitHub repository:
-- `DOCKER_HUB_USERNAME`
-- `DOCKER_HUB_TOKEN`
 
 ## Graceful Shutdown 🛑
 The application handles SIGINT and SIGTERM signals for clean shutdown. When terminated, it will:
