@@ -122,7 +122,7 @@ func keyExists(filePath, publicKey string) (bool, error) {
 			continue
 		}
 		existingComment := strings.Join(parts[2:], " ")
-		if existingComment == newComment {
+		if parts[0] == newParts[0] && parts[1] == newParts[1] && existingComment == newComment {
 			return true, nil
 		}
 	}
