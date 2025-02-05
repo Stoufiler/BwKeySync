@@ -23,7 +23,9 @@ jobs:
           goos: 'linux'
           goarch: 'amd64'
           ldflags: '-extldflags=-lm'
-          binary_name: "BwKeySync-linux-amd64"
+          binary_name: "BwKeySync"
+          asset_name: "${BINARY_NAME}-${GOOS}-${GOARCH}"
+          compress_assets: false
 
   release-linux-arm64:
     runs-on: ubuntu-latest
@@ -37,7 +39,7 @@ jobs:
       - name: Install ARM64 build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu musl-tools
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Build release
         run: |
