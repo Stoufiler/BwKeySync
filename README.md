@@ -1,104 +1,102 @@
-# Bitwarden Key Sync 🔑
+# Bitwarden SSH Key Sync
 
-## Overview 🌐
-This Go application automatically syncs a public key from Bitwarden Secrets Manager to a specified user's authorized_keys file at regular intervals.
+Automatically sync SSH public keys from Bitwarden Secrets Manager to `authorized_keys`.
 
-## Requirements 📋
+## Features
 
-### Environment Variables
-- `BW_SECRET_ID`: The ID of the secret containing the public key
-- `BW_ACCESS_TOKEN`: Bitwarden API access token
-- `BW_SERVER_URL`: Bitwarden server URL
-- `BW_SSH_USER`: The user whose authorized_keys file should be updated
+- Configurable sync interval
+- YAML configuration
+- Automatic retry with exponential backoff
+- Graceful shutdown handling
+- Log rotation support
 
-## Usage 🚀
+## Configuration
 
-### Installation
-```bash
-go build -o bwkeysync
+Create `config.yaml`:
+
+```yaml
+bitwarden:
+  secret_id: "your_secret_id"
+  access_token: "your_access_token"  
+  server_url: "https://vault.bitwarden.eu"
+ssh_user: "your_ssh_username"
+interval: 10m
 ```
 
-### Running
+## Usage
+
 ```bash
-./bwkeysync --interval 10m
+# Default config location
+./bwkeysync
+
+# Custom config path
+./bwkeysync --config /path/to/config.yaml
 ```
 
-### Options
-- `--interval`: Time between key syncs (default: 10m)
+## Dependencies
+
+- Go 1.21+
+- Bitwarden Secrets Manager API access
+- gopkg.in/yaml.v3
 
 ## Running as a Service
 
-To run BwKeySync as a service and start it at boot with an interval of 30 minutes, follow these steps:
+### Systemd Service Setup
 
-1. Create a service file:
-
-```bash
-sudo nano /etc/systemd/system/bwkeysync.service
-```
-
-2. Add the following content to the service file:
-
+1. Create service file `/etc/systemd/system/bwkeysync.service`:
 ```ini
 [Unit]
-Description=BwKeySync Service
+Description=Bitwarden SSH Key Sync Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/bwkeysync --interval 30m
+Type=simple
+User=root
+ExecStart=/usr/local/bin/bwkeysync --config /etc/bwkeysync/config.yaml
 Restart=always
-RestartSec=30m
+RestartSec=10
+Environment="PATH=/usr/local/bin"
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-3. Reload the systemd daemon and enable the service:
+2. Deploy application files:
+```bash
+sudo mkdir -p /etc/bwkeysync
+sudo cp bwkeysync /usr/local/bin/
+sudo cp config.yaml /etc/bwkeysync/
+sudo chmod 600 /etc/bwkeysync/config.yaml
+```
 
+3. Enable and start the service:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable bwkeysync.service
-```
-
-4. Start the service:
-
-```bash
 sudo systemctl start bwkeysync.service
 ```
 
-5. Check the status of the service:
-
+4. Check the status of the service:
 ```bash
 sudo systemctl status bwkeysync.service
 ```
 
-## How It Works ⚙️
+## How It Works 
 1. The application fetches the public key from Bitwarden Secrets Manager
 2. Checks if the key exists in the user's authorized_keys file
 3. If not present, appends the key to the file
 4. Repeats this process at the specified interval
 
 ## Important Note
-⚠️ **Warning:** The script identifies existing keys by their **comment portion** (typically the last part of the key). This means that keys with identical comments will be considered duplicates, and changing a key's comment will be treated as a new key. Modifying key material while keeping the same comment will be detected as an update.
+ ⚠️ **Warning:** The script identifies existing keys by their **comment portion** (typically the last part of the key). This means that keys with identical comments will be considered duplicates, and changing a key's comment will be treated as a new key. Modifying key material while keeping the same comment will be detected as an update.
 
-## CI/CD Pipeline 🚀
-
-This project uses GitHub Actions for:
-- Automated testing on every push/pull request
-- Building the application
-
-### GitHub Actions
-
-The CI/CD pipeline includes:
-1. Unit testing
-2. Building the application
-
-## Graceful Shutdown 🛑
+## Graceful Shutdown 
 The application handles SIGINT and SIGTERM signals for clean shutdown. When terminated, it will:
 1. Stop the interval ticker
 2. Complete any ongoing key sync
 3. Exit cleanly
 
-## Notes 📝
+## Notes 
 - The application runs continuously in the background
 - Errors are logged but don't stop the application (except for initial setup errors)
-- The interval can be adjusted as needed
+- The interval can be adjusted as needed in the config file

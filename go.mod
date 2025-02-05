@@ -9,6 +9,7 @@ require (
 	github.com/bitwarden/sdk-go v1.0.2
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/sirupsen/logrus v1.9.3
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

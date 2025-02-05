@@ -20,7 +20,18 @@ import (
 	"github.com/bitwarden/sdk-go"
 	"github.com/natefinch/lumberjack"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
+
+type Config struct {
+	Bitwarden struct {
+		SecretID    string `yaml:"secret_id"`
+		AccessToken string `yaml:"access_token"`
+		ServerURL   string `yaml:"server_url"`
+	} `yaml:"bitwarden"`
+	SSHUser  string        `yaml:"ssh_user"`
+	Interval time.Duration `yaml:"interval"`
+}
 
 var logger = logrus.New()
 
@@ -52,12 +63,32 @@ func initLogger() {
 	})
 }
 
-// getEnv retrieves an environment variable and returns an error if not present
-func getEnv(key string) (string, error) {
-	if value, ok := os.LookupEnv(key); ok && value != "" {
-		return value, nil
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
-	return "", fmt.Errorf("environment variable %s not set", key)
+
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Validation
+	if config.Bitwarden.SecretID == "" {
+		return nil, errors.New("bitwarden.secret_id is required")
+	}
+	if config.Bitwarden.AccessToken == "" {
+		return nil, errors.New("bitwarden.access_token is required")
+	}
+	if config.SSHUser == "" {
+		return nil, errors.New("ssh_user is required")
+	}
+	if config.Interval == 0 {
+		return nil, errors.New("interval must be greater than 0")
+	}
+
+	return &config, nil
 }
 
 // fetchPublicKey fetches the public key from Bitwarden Secrets Manager using the SDK
@@ -71,10 +102,7 @@ func fetchPublicKey(serverURL, secretID, accessToken string) (string, error) {
 	}
 	defer bitwardenClient.Close()
 
-	stateFile := os.Getenv("STATE_FILE")
-	if stateFile == "" {
-		stateFile = ".bitwarden_state"
-	}
+	stateFile := ".bitwarden_state"
 
 	err = bitwardenClient.AccessTokenLogin(accessToken, &stateFile)
 	if err != nil {
@@ -206,31 +234,12 @@ func (e *SyncError) Error() string {
 	return fmt.Sprintf("[%d] %s: %v", e.Code, e.Message, e.Err)
 }
 
-func checkEnvVars() error {
-	requiredVars := []string{"BW_SECRET_ID", "BW_ACCESS_TOKEN", "BW_SERVER_URL", "BW_SSH_USER"}
-	for _, envVar := range requiredVars {
-		if os.Getenv(envVar) == "" {
-			return fmt.Errorf("required environment variable %s not set", envVar)
-		}
-	}
-	return nil
-}
-
-// Run starts the application
-func Run() error {
+func Run(config *Config) error {
 	initLogger()
 	logger.Info("Starting Bitwarden Key Sync")
 
-	if err := checkEnvVars(); err != nil {
-		logger.Error(err)
-		return err
-	}
-
-	interval := flag.Duration("interval", 10*time.Minute, "Interval between public key fetches (in minutes)")
-	flag.Parse()
-
 	logger.WithFields(logrus.Fields{
-		"interval": interval.String(),
+		"interval": config.Interval.String(),
 	}).Info("Configuration loaded")
 
 	// Set up signal handling for graceful shutdown
@@ -238,18 +247,18 @@ func Run() error {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	// Run the first fetch immediately
-	if err := fetchAndUpdate(); err != nil {
+	if err := fetchAndUpdate(config); err != nil {
 		return err
 	}
 
 	// Start the periodic fetch loop
-	ticker := time.NewTicker(*interval)
+	ticker := time.NewTicker(config.Interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			if err := fetchAndUpdate(); err != nil {
+			if err := fetchAndUpdate(config); err != nil {
 				return err
 			}
 		case <-sigs:
@@ -260,22 +269,11 @@ func Run() error {
 }
 
 // fetchAndUpdate retrieves the Bitwarden public key with retry logic and ensures it's present in authorized_keys.
-func fetchAndUpdate() error {
-	secretID := os.Getenv("BW_SECRET_ID")
-	token, err := getEnv("BW_ACCESS_TOKEN")
-	if err != nil {
-		return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_ACCESS_TOKEN", Err: err}
-	}
-
-	serverURL, err := getEnv("BW_SERVER_URL")
-	if err != nil {
-		return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SERVER_URL", Err: err}
-	}
-
-	sshUser, err := getEnv("BW_SSH_USER")
-	if err != nil {
-		return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SSH_USER", Err: err}
-	}
+func fetchAndUpdate(config *Config) error {
+	secretID := config.Bitwarden.SecretID
+	token := config.Bitwarden.AccessToken
+	serverURL := config.Bitwarden.ServerURL
+	sshUser := config.SSHUser
 
 	logger.WithFields(logrus.Fields{
 		"secretID":  secretID,
@@ -284,7 +282,7 @@ func fetchAndUpdate() error {
 	}).Debug("Environment variables loaded")
 
 	var publicKey string
-	err = retry.Do(
+	err := retry.Do(
 		func() error {
 			var err error
 			publicKey, err = fetchPublicKey(serverURL, secretID, token)
@@ -313,7 +311,15 @@ func fetchAndUpdate() error {
 }
 
 func main() {
-	if err := Run(); err != nil {
+	var configPath string
+	flag.StringVar(&configPath, "config", "config.yaml", "Path to configuration file")
+	flag.Parse()
+
+	config, err := loadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Error loading config: %v", err)
+	}
+	if err := Run(config); err != nil {
 		log.Fatal(err)
 	}
 }

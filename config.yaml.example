@@ -1,0 +1,7 @@
+# Example configuration
+bitwarden:
+  secret_id: your_secret_id
+  access_token: your_access_token
+  server_url: https://vault.bitwarden.eu
+ssh_user: your_ssh_username
+interval: 10m
