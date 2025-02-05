@@ -23,6 +23,7 @@ jobs:
           goos: 'linux'
           goarch: 'amd64'
           ldflags: '-extldflags=-lm'
+          binary_name: "BwKeySync-linux-amd64"
 
   release-linux-arm64:
     runs-on: ubuntu-latest
@@ -48,12 +49,12 @@ jobs:
       - name: Package release
         run: |
           mkdir -p release
-          tar -czvf "release/BwKeySync-${{ github.ref_name }}-${GOOS}-${GOARCH}.tar.gz" BwKeySync
-          md5sum "release/BwKeySync-${{ github.ref_name }}-${GOOS}-${GOARCH}.tar.gz" > "release/BwKeySync-${{ github.ref_name }}-${GOOS}-${GOARCH}.tar.gz.md5"
+          tar -czvf "release/BwKeySync-${GOOS}-${GOARCH}.tar.gz" BwKeySync
+          md5sum "release/BwKeySync-${GOOS}-${GOARCH}.tar.gz" > "release/BwKeySync-${GOOS}-${GOARCH}.tar.gz.md5"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            release/BwKeySync-${{ github.ref_name }}-${{ env.GOOS }}-${{ env.GOARCH }}.tar.gz
-            release/BwKeySync-${{ github.ref_name }}-${{ env.GOOS }}-${{ env.GOARCH }}.tar.gz.md5
+            release/BwKeySync-${{ env.GOOS }}-${{ env.GOARCH }}.tar.gz
+            release/BwKeySync-${{ env.GOOS }}-${{ env.GOARCH }}.tar.gz.md5

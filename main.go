@@ -1,5 +1,8 @@
 package main
 
+// Bitwarden Key Sync main application.
+// Retrieves public keys from Bitwarden and ensures they are added to the SSH authorized_keys file.
+
 import (
 	"bufio"
 	"errors"
@@ -13,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/avast/retry-go"
 	"github.com/bitwarden/sdk-go"
 	"github.com/natefinch/lumberjack"
 	"github.com/sirupsen/logrus"
@@ -99,31 +103,36 @@ func authorizedKeysPath(sshUser string) string {
 	return filepath.Join("/home", sshUser, ".ssh", "authorized_keys")
 }
 
-// ensureKeyInAuthorizedKeys appends the public key to authorized_keys if not already present
-func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) error {
-	// Read existing authorized_keys file
-	file, err := os.Open(authorizedKeysPath)
+// readAuthorizedKeys reads the authorized_keys file and returns its lines
+func readAuthorizedKeys(path string) ([]string, error) {
+	file, err := os.Open(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return nil, err
 	}
 
-	var existingLines []string
+	var lines []string
 	if file != nil {
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
-			existingLines = append(existingLines, scanner.Text())
+			lines = append(lines, scanner.Text())
 		}
 		file.Close()
 	}
+	return lines, nil
+}
 
-	// Parse Bitwarden key and comment
-	bitwardenParts := strings.Split(bitwardenKey, " ")
-	bitwardenComment := ""
-	if len(bitwardenParts) > 2 {
-		bitwardenComment = strings.Join(bitwardenParts[2:], " ")
+// parseKeyComment extracts the comment from an SSH key
+func parseKeyComment(key string) string {
+	parts := strings.Split(key, " ")
+	if len(parts) > 2 {
+		return strings.Join(parts[2:], " ")
 	}
+	return ""
+}
 
-	// Process existing lines
+// processKeys ensures the bitwarden key exists in the authorized_keys list
+func processKeys(existingLines []string, bitwardenKey string) []string {
+	bitwardenComment := parseKeyComment(bitwardenKey)
 	var newLines []string
 	keyExists := false
 	seenKeys := make(map[string]bool)
@@ -139,8 +148,7 @@ func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) e
 		}
 
 		// Check if comment matches
-		parts := strings.Split(line, " ")
-		if len(parts) > 2 && strings.Join(parts[2:], " ") == bitwardenComment {
+		if parseKeyComment(line) == bitwardenComment {
 			if !seenKeys[bitwardenKey] {
 				newLines = append(newLines, bitwardenKey)
 				seenKeys[bitwardenKey] = true
@@ -159,17 +167,24 @@ func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) e
 		newLines = append(newLines, bitwardenKey)
 	}
 
-	// Write updated file
-	return os.WriteFile(authorizedKeysPath, []byte(strings.Join(newLines, "\n")), 0600)
+	return newLines
 }
 
-const (
-	maxRetries        = 3
-	initialBackoff    = 1 * time.Second
-	maxBackoff        = 30 * time.Second
-	backoffMultiplier = 2.0
-	jitterFactor      = 0.1
-)
+// writeAuthorizedKeys writes the authorized_keys file
+func writeAuthorizedKeys(path string, lines []string) error {
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600)
+}
+
+// ensureKeyInAuthorizedKeys orchestrates the process of ensuring a key exists in authorized_keys
+func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) error {
+	existingLines, err := readAuthorizedKeys(authorizedKeysPath)
+	if err != nil {
+		return err
+	}
+
+	newLines := processKeys(existingLines, bitwardenKey)
+	return writeAuthorizedKeys(authorizedKeysPath, newLines)
+}
 
 type ErrorCode int
 
@@ -191,51 +206,25 @@ func (e *SyncError) Error() string {
 	return fmt.Sprintf("[%d] %s: %v", e.Code, e.Message, e.Err)
 }
 
-func withRetry(fn func() error, operation string) error {
-	var lastErr error
-	backoff := initialBackoff
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		err := fn()
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-		logger.WithFields(logrus.Fields{
-			"attempt":   attempt,
-			"operation": operation,
-			"backoff":   backoff.String(),
-		}).Warn("Operation failed, retrying")
-
-		if attempt < maxRetries {
-			time.Sleep(backoff)
-			backoff = time.Duration(float64(backoff) * backoffMultiplier)
-
-			jitter := time.Duration(float64(backoff) * jitterFactor)
-			if attempt%2 == 0 {
-				backoff += jitter
-			} else {
-				backoff -= jitter
-			}
-
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+func checkEnvVars() error {
+	requiredVars := []string{"BW_SECRET_ID", "BW_ACCESS_TOKEN", "BW_SERVER_URL", "BW_SSH_USER"}
+	for _, envVar := range requiredVars {
+		if os.Getenv(envVar) == "" {
+			return fmt.Errorf("required environment variable %s not set", envVar)
 		}
 	}
-
-	return &SyncError{
-		Code:    ErrMaxRetriesExceeded,
-		Message: fmt.Sprintf("Max retries (%d) exceeded for operation: %s", maxRetries, operation),
-		Err:     lastErr,
-	}
+	return nil
 }
 
 // Run starts the application
 func Run() error {
 	initLogger()
 	logger.Info("Starting Bitwarden Key Sync")
+
+	if err := checkEnvVars(); err != nil {
+		logger.Error(err)
+		return err
+	}
 
 	interval := flag.Duration("interval", 10*time.Minute, "Interval between public key fetches (in minutes)")
 	flag.Parse()
@@ -270,51 +259,57 @@ func Run() error {
 	}
 }
 
+// fetchAndUpdate retrieves the Bitwarden public key with retry logic and ensures it's present in authorized_keys.
 func fetchAndUpdate() error {
-	return withRetry(func() error {
-		logger.Debug("Starting fetch and update process")
+	secretID := os.Getenv("BW_SECRET_ID")
+	token, err := getEnv("BW_ACCESS_TOKEN")
+	if err != nil {
+		return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_ACCESS_TOKEN", Err: err}
+	}
 
-		secretID, err := getEnv("BW_SECRET_ID")
-		if err != nil {
-			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SECRET_ID", Err: err}
-		}
+	serverURL, err := getEnv("BW_SERVER_URL")
+	if err != nil {
+		return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SERVER_URL", Err: err}
+	}
 
-		token, err := getEnv("BW_ACCESS_TOKEN")
-		if err != nil {
-			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_ACCESS_TOKEN", Err: err}
-		}
+	sshUser, err := getEnv("BW_SSH_USER")
+	if err != nil {
+		return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SSH_USER", Err: err}
+	}
 
-		serverURL, err := getEnv("BW_SERVER_URL")
-		if err != nil {
-			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SERVER_URL", Err: err}
-		}
+	logger.WithFields(logrus.Fields{
+		"secretID":  secretID,
+		"serverURL": serverURL,
+		"sshUser":   sshUser,
+	}).Debug("Environment variables loaded")
 
-		sshUser, err := getEnv("BW_SSH_USER")
-		if err != nil {
-			return &SyncError{Code: ErrAuthFailed, Message: "Failed to read BW_SSH_USER", Err: err}
-		}
+	var publicKey string
+	err = retry.Do(
+		func() error {
+			var err error
+			publicKey, err = fetchPublicKey(serverURL, secretID, token)
+			return err
+		},
+		retry.Attempts(3),
+		retry.OnRetry(func(n uint, err error) {
+			logger.Infof("Retry attempt %d: %v", n+1, err)
+		}),
+	)
+	if err != nil {
+		return &SyncError{Code: ErrNetworkError, Message: "Failed to fetch public key", Err: err}
+	}
 
-		logger.WithFields(logrus.Fields{
-			"secretID":  secretID,
-			"serverURL": serverURL,
-			"sshUser":   sshUser,
-		}).Debug("Environment variables loaded")
+	logger.Debug("Public key fetched successfully")
+	authKeysPath := authorizedKeysPath(sshUser)
+	logger.WithField("authKeysPath", authKeysPath).Debug("Authorized keys path resolved")
 
-		logger.Debug("Fetching public key from Bitwarden")
-		publicKey, err := fetchPublicKey(serverURL, secretID, token)
-		if err != nil {
-			return &SyncError{Code: ErrNetworkError, Message: "Failed to fetch public key", Err: err}
-		}
+	logger.Debug("Ensuring public key is present in authorized_keys")
+	err = ensureKeyInAuthorizedKeys(authKeysPath, publicKey)
+	if err != nil {
+		return &SyncError{Code: ErrFileSystemError, Message: "Failed to update authorized_keys", Err: err}
+	}
 
-		logger.Debug("Public key fetched successfully")
-
-		authKeysPath := authorizedKeysPath(sshUser)
-
-		logger.WithField("authKeysPath", authKeysPath).Debug("Authorized keys path resolved")
-
-		logger.Debug("Ensuring public key is present in authorized_keys")
-		return ensureKeyInAuthorizedKeys(authKeysPath, publicKey)
-	}, "fetchAndUpdate")
+	return nil
 }
 
 func main() {
