@@ -26,6 +26,7 @@ jobs:
           binary_name: "BwKeySync"
           asset_name: "BwKeySync-${{ env.GOOS }}-${{ env.GOARCH }}"
           compress_assets: false
+          md5sum: false
 
   release-linux-arm64:
     runs-on: ubuntu-latest
@@ -57,4 +58,3 @@ jobs:
         with:
           files: |
             BwKeySync-${{ env.GOOS }}-${{ env.GOARCH }}
-            BwKeySync-${{ env.GOOS }}-${{ env.GOARCH }}.md5
