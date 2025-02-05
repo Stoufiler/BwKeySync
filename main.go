@@ -35,13 +35,18 @@ type Config struct {
 
 var logger = logrus.New()
 
-func initLogger() {
+func initLogger(logPath string) {
+	// Create log directory if needed
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		log.Fatalf("Failed to create log directory: %v", err)
+	}
+
 	// Configure log rotation
 	logger.SetOutput(&lumberjack.Logger{
-		Filename:   "bwkeysync.log",
-		MaxSize:    10, // megabytes
+		Filename:   logPath,
+		MaxSize:    100, // megabytes
 		MaxBackups: 3,
-		MaxAge:     30, // days
+		MaxAge:     28, // days
 		Compress:   true,
 	})
 
@@ -235,7 +240,7 @@ func (e *SyncError) Error() string {
 }
 
 func Run(config *Config) error {
-	initLogger()
+	initLogger("/var/log/bwkeysync.log")
 	logger.Info("Starting Bitwarden Key Sync")
 
 	logger.WithFields(logrus.Fields{
@@ -312,9 +317,12 @@ func fetchAndUpdate(config *Config) error {
 
 func main() {
 	var configPath string
+	var logPath string
 	flag.StringVar(&configPath, "config", "config.yaml", "Path to configuration file")
+	flag.StringVar(&logPath, "log-file", "/var/log/bwkeysync.log", "Path to log file")
 	flag.Parse()
 
+	initLogger(logPath)
 	config, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
