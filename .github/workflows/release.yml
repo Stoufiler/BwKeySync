@@ -24,7 +24,7 @@ jobs:
           goarch: 'amd64'
           ldflags: '-extldflags=-lm'
           binary_name: "BwKeySync"
-          asset_name: 'BwKeySync-${goos}-${goarch}'
+          asset_name: 'BwKeySync-${GOOS}-${GOARCH}'
           compress_assets: false
 
   release-linux-arm64:
