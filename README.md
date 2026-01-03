@@ -19,8 +19,14 @@ bitwarden:
   secret_id: "your_secret_id"
   access_token: "your_access_token"  
   server_url: "https://vault.bitwarden.eu"
-ssh_user: "your_ssh_username"
+ssh_user: "your_ssh_username" # Target user (syncs to ~user/.ssh/authorized_keys)
+# authorized_keys_file: "/custom/path/authorized_keys" # Optional: Override default path
 interval: 10m
+
+# Auto-update configuration (checks GitHub releases)
+auto_update:
+  enabled: true
+  check_interval: 24h
 ```
 
 ## Usage
@@ -35,7 +41,7 @@ interval: 10m
 
 ## Dependencies
 
-- Go 1.21+
+- Go 1.25.5
 - Bitwarden Secrets Manager API access
 - gopkg.in/yaml.v3
 

@@ -1,0 +1,620 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>bwkeysync: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">bwkeysync/main.go (93.6%)</option>
+				
+				<option value="file1">bwkeysync/updater.go (95.2%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package main
+
+// Bitwarden Key Sync main application.
+// Retrieves public keys from Bitwarden and ensures they are added to the SSH authorized_keys file.
+
+import (
+        "bufio"
+        "context"
+        "errors"
+        "flag"
+        "fmt"
+        "log"
+        "os"
+        "os/signal"
+        "path/filepath"
+        "strings"
+        "syscall"
+        "time"
+
+        "github.com/avast/retry-go"
+        "github.com/bitwarden/sdk-go"
+        "github.com/natefinch/lumberjack"
+        "github.com/sirupsen/logrus"
+        "gopkg.in/yaml.v3"
+)
+
+type Config struct {
+        Bitwarden struct {
+                SecretID    string `yaml:"secret_id"`
+                AccessToken string `yaml:"access_token"`
+                ServerURL   string `yaml:"server_url"`
+        } `yaml:"bitwarden"`
+        SSHUser            string        `yaml:"ssh_user"`
+        AuthorizedKeysFile string        `yaml:"authorized_keys_file,omitempty"`
+        Interval           time.Duration `yaml:"interval"`
+        AutoUpdate         struct {
+                Enabled       bool          `yaml:"enabled"`
+                CheckInterval time.Duration `yaml:"check_interval"`
+        } `yaml:"auto_update"`
+}
+
+var logger = logrus.New()
+
+func initLogger(logPath string) error <span class="cov8" title="1">{
+        // Create log directory if needed
+        if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("failed to create log directory: %w", err)
+        }</span>
+
+        // Configure log rotation
+        <span class="cov8" title="1">logger.SetOutput(&amp;lumberjack.Logger{
+                Filename:   logPath,
+                MaxSize:    100, // megabytes
+                MaxBackups: 3,
+                MaxAge:     28, // days
+                Compress:   true,
+        })
+
+        // Set log level from environment variable
+        switch os.Getenv("LOG_LEVEL") </span>{
+        case "debug":<span class="cov8" title="1">
+                logger.SetLevel(logrus.DebugLevel)</span>
+        case "warn":<span class="cov0" title="0">
+                logger.SetLevel(logrus.WarnLevel)</span>
+        case "error":<span class="cov0" title="0">
+                logger.SetLevel(logrus.ErrorLevel)</span>
+        default:<span class="cov8" title="1">
+                logger.SetLevel(logrus.InfoLevel)</span>
+        }
+
+        // Use JSON format for structured logging
+        <span class="cov8" title="1">logger.SetFormatter(&amp;logrus.JSONFormatter{
+                TimestampFormat: "2006-01-02 15:04:05",
+        })
+        
+        return nil</span>
+}
+
+func loadConfig(path string) (*Config, error) <span class="cov8" title="1">{
+        data, err := os.ReadFile(path)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("failed to read config file: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">var config Config
+        if err := yaml.Unmarshal(data, &amp;config); err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("failed to parse config file: %w", err)
+        }</span>
+
+        // Validation
+        <span class="cov8" title="1">if config.Bitwarden.SecretID == "" </span><span class="cov8" title="1">{
+                return nil, errors.New("bitwarden.secret_id is required")
+        }</span>
+        <span class="cov8" title="1">if config.Bitwarden.AccessToken == "" </span><span class="cov0" title="0">{
+                return nil, errors.New("bitwarden.access_token is required")
+        }</span>
+        <span class="cov8" title="1">if config.SSHUser == "" &amp;&amp; config.AuthorizedKeysFile == "" </span><span class="cov0" title="0">{
+                return nil, errors.New("ssh_user or authorized_keys_file is required")
+        }</span>
+        <span class="cov8" title="1">if config.Interval == 0 </span><span class="cov0" title="0">{
+                return nil, errors.New("interval must be greater than 0")
+        }</span>
+
+        <span class="cov8" title="1">return &amp;config, nil</span>
+}
+
+// BitwardenClient defines the interface for Bitwarden operations
+type BitwardenClient interface {
+        AccessTokenLogin(accessToken string, stateFile *string) error
+        GetSecretValue(id string) (string, error)
+        Close()
+}
+
+// RealBitwardenClient wraps the SDK client
+type RealBitwardenClient struct {
+        client sdk.BitwardenClientInterface
+}
+
+func (c *RealBitwardenClient) AccessTokenLogin(accessToken string, stateFile *string) error <span class="cov8" title="1">{
+        return c.client.AccessTokenLogin(accessToken, stateFile)
+}</span>
+
+func (c *RealBitwardenClient) GetSecretValue(id string) (string, error) <span class="cov8" title="1">{
+        resp, err := c.client.Secrets().Get(id)
+        if err != nil </span><span class="cov8" title="1">{
+                return "", err
+        }</span>
+        <span class="cov8" title="1">return resp.Value, nil</span>
+}
+
+func (c *RealBitwardenClient) Close() <span class="cov8" title="1">{
+        c.client.Close()
+}</span>
+
+// ClientCreator allows mocking the client creation
+var NewBitwardenClient = func(apiURL, identityURL *string) (BitwardenClient, error) <span class="cov8" title="1">{
+        c, err := sdk.NewBitwardenClient(apiURL, identityURL)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">return &amp;RealBitwardenClient{client: c}, nil</span>
+}
+
+// fetchPublicKey fetches the public key from Bitwarden Secrets Manager using the SDK
+func fetchPublicKey(serverURL, secretID, accessToken string) (string, error) <span class="cov8" title="1">{
+        apiURL := serverURL + "/api"
+        identityURL := serverURL + "/identity"
+
+        bitwardenClient, err := NewBitwardenClient(&amp;apiURL, &amp;identityURL)
+        if err != nil </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("failed to create Bitwarden client: %w", err)
+        }</span>
+        <span class="cov8" title="1">defer bitwardenClient.Close()
+
+        stateFile := ".bitwarden_state"
+
+        err = bitwardenClient.AccessTokenLogin(accessToken, &amp;stateFile)
+        if err != nil </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("failed to authenticate with Bitwarden: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">value, err := bitwardenClient.GetSecretValue(secretID)
+        if err != nil </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("failed to fetch secret: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">key := strings.TrimSpace(value)
+        if key == "" </span><span class="cov8" title="1">{
+                return "", errors.New("empty public key received")
+        }</span>
+
+        <span class="cov8" title="1">return key, nil</span>
+}
+
+// resolveAuthorizedKeysPath determines the path to the authorized_keys file
+func resolveAuthorizedKeysPath(config *Config) string <span class="cov8" title="1">{
+        if config.AuthorizedKeysFile != "" </span><span class="cov8" title="1">{
+                return config.AuthorizedKeysFile
+        }</span>
+        <span class="cov8" title="1">if config.SSHUser == "root" </span><span class="cov8" title="1">{
+                return "/root/.ssh/authorized_keys"
+        }</span>
+        <span class="cov8" title="1">return filepath.Join("/home", config.SSHUser, ".ssh", "authorized_keys")</span>
+}
+
+// authorizedKeysPath returns the path to the authorized_keys file based on sshUser
+func authorizedKeysPath(sshUser string) string <span class="cov8" title="1">{
+        if sshUser == "root" </span><span class="cov8" title="1">{
+                return "/root/.ssh/authorized_keys"
+        }</span>
+        // Assuming typical Linux home directory structure
+        <span class="cov8" title="1">return filepath.Join("/home", sshUser, ".ssh", "authorized_keys")</span>
+}
+
+// readAuthorizedKeys reads the authorized_keys file and returns its lines
+func readAuthorizedKeys(path string) ([]string, error) <span class="cov8" title="1">{
+        file, err := os.Open(path)
+        if err != nil &amp;&amp; !os.IsNotExist(err) </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">var lines []string
+        if file != nil </span><span class="cov8" title="1">{
+                scanner := bufio.NewScanner(file)
+                for scanner.Scan() </span><span class="cov8" title="1">{
+                        lines = append(lines, scanner.Text())
+                }</span>
+                <span class="cov8" title="1">file.Close()</span>
+        }
+        <span class="cov8" title="1">return lines, nil</span>
+}
+
+// parseKeyComment extracts the comment from an SSH key
+func parseKeyComment(key string) string <span class="cov8" title="1">{
+        parts := strings.Split(key, " ")
+        if len(parts) &gt; 2 </span><span class="cov8" title="1">{
+                return strings.Join(parts[2:], " ")
+        }</span>
+        <span class="cov8" title="1">return ""</span>
+}
+
+// processKeys ensures the bitwarden key exists in the authorized_keys list
+func processKeys(existingLines []string, bitwardenKey string) []string <span class="cov8" title="1">{
+        bitwardenComment := parseKeyComment(bitwardenKey)
+        var newLines []string
+        keyExists := false
+        seenKeys := make(map[string]bool)
+
+        for _, line := range existingLines </span><span class="cov8" title="1">{
+                if line == bitwardenKey </span><span class="cov8" title="1">{
+                        if !seenKeys[line] </span><span class="cov8" title="1">{
+                                newLines = append(newLines, line)
+                                seenKeys[line] = true
+                        }</span>
+                        <span class="cov8" title="1">keyExists = true
+                        continue</span>
+                }
+
+                // Check if comment matches
+                <span class="cov8" title="1">if parseKeyComment(line) == bitwardenComment </span><span class="cov8" title="1">{
+                        if !seenKeys[bitwardenKey] </span><span class="cov8" title="1">{
+                                newLines = append(newLines, bitwardenKey)
+                                seenKeys[bitwardenKey] = true
+                        }</span>
+                        <span class="cov8" title="1">keyExists = true</span>
+                } else<span class="cov8" title="1"> {
+                        if !seenKeys[line] </span><span class="cov8" title="1">{
+                                newLines = append(newLines, line)
+                                seenKeys[line] = true
+                        }</span>
+                }
+        }
+
+        // If key doesn't exist, append it
+        <span class="cov8" title="1">if !keyExists </span><span class="cov8" title="1">{
+                newLines = append(newLines, bitwardenKey)
+        }</span>
+
+        <span class="cov8" title="1">return newLines</span>
+}
+
+// writeAuthorizedKeys writes the authorized_keys file
+func writeAuthorizedKeys(path string, lines []string) error <span class="cov8" title="1">{
+        return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600)
+}</span>
+
+// ensureKeyInAuthorizedKeys orchestrates the process of ensuring a key exists in authorized_keys
+func ensureKeyInAuthorizedKeys(authorizedKeysPath string, bitwardenKey string) error <span class="cov8" title="1">{
+        existingLines, err := readAuthorizedKeys(authorizedKeysPath)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">newLines := processKeys(existingLines, bitwardenKey)
+        return writeAuthorizedKeys(authorizedKeysPath, newLines)</span>
+}
+
+type ErrorCode int
+
+const (
+        ErrAuthFailed ErrorCode = iota + 1
+        ErrNetworkError
+        ErrInvalidResponse
+        ErrFileSystemError
+        ErrMaxRetriesExceeded
+)
+
+type SyncError struct {
+        Code    ErrorCode
+        Message string
+        Err     error
+}
+
+func (e *SyncError) Error() string <span class="cov8" title="1">{
+        return fmt.Sprintf("[%d] %s: %v", e.Code, e.Message, e.Err)
+}</span>
+
+// KeyFetcher defines the function signature for fetching keys
+type KeyFetcher func(serverURL, secretID, accessToken string) (string, error)
+
+var DefaultFetcher KeyFetcher = fetchPublicKey
+
+func Run(ctx context.Context, config *Config, fetcher KeyFetcher) error <span class="cov8" title="1">{
+        logger.Info("Starting Bitwarden Key Sync")
+
+        logger.WithFields(logrus.Fields{
+                "interval": config.Interval.String(),
+        }).Info("Configuration loaded")
+
+        // Start auto-update scheduler
+        _ = startUpdateScheduler(config)
+
+        // Run the first fetch immediately
+        if err := fetchAndUpdate(config, fetcher); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+
+        // Start the periodic fetch loop
+        <span class="cov8" title="1">ticker := time.NewTicker(config.Interval)
+        defer ticker.Stop()
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-ticker.C:<span class="cov8" title="1">
+                        if err := fetchAndUpdate(config, fetcher); err != nil </span><span class="cov8" title="1">{
+                                return err
+                        }</span>
+                case &lt;-ctx.Done():<span class="cov8" title="1">
+                        logger.Info("Shutting down")
+                        return nil</span>
+                }
+        }
+}
+
+// fetchAndUpdate retrieves the Bitwarden public key with retry logic and ensures it's present in authorized_keys.
+func fetchAndUpdate(config *Config, fetcher KeyFetcher) error <span class="cov8" title="1">{
+        secretID := config.Bitwarden.SecretID
+        token := config.Bitwarden.AccessToken
+        serverURL := config.Bitwarden.ServerURL
+        // sshUser usage is replaced by resolveAuthorizedKeysPath logic
+
+        logger.WithFields(logrus.Fields{
+                "secretID":  secretID,
+                "serverURL": serverURL,
+                "sshUser":   config.SSHUser,
+        }).Debug("Environment variables loaded")
+
+        var publicKey string
+        err := retry.Do(
+                func() error </span><span class="cov8" title="1">{
+                        var err error
+                        publicKey, err = fetcher(serverURL, secretID, token)
+                        return err
+                }</span>,
+                retry.Attempts(3),
+                retry.OnRetry(func(n uint, err error) <span class="cov8" title="1">{
+                        logger.Infof("Retry attempt %d: %v", n+1, err)
+                }</span>),
+        )
+        <span class="cov8" title="1">if err != nil </span><span class="cov8" title="1">{
+                return &amp;SyncError{Code: ErrNetworkError, Message: "Failed to fetch public key", Err: err}
+        }</span>
+
+        <span class="cov8" title="1">logger.Debug("Public key fetched successfully")
+        authKeysPath := resolveAuthorizedKeysPath(config)
+        logger.WithField("authKeysPath", authKeysPath).Debug("Authorized keys path resolved")
+
+        logger.Debug("Ensuring public key is present in authorized_keys")
+        err = ensureKeyInAuthorizedKeys(authKeysPath, publicKey)
+        if err != nil </span><span class="cov8" title="1">{
+                return &amp;SyncError{Code: ErrFileSystemError, Message: "Failed to update authorized_keys", Err: err}
+        }</span>
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+func main() <span class="cov0" title="0">{
+        if err := runApp(os.Args); err != nil </span><span class="cov0" title="0">{
+                log.Fatal(err)
+        }</span>
+}
+
+func runApp(args []string) error <span class="cov8" title="1">{
+        var configPath string
+        var logPath string
+        
+        // Use a FlagSet to avoid polluting global flags in tests
+        fs := flag.NewFlagSet("bwkeysync", flag.ContinueOnError)
+        fs.StringVar(&amp;configPath, "config", "config.yaml", "Path to configuration file")
+        fs.StringVar(&amp;logPath, "log-file", "/var/log/bwkeysync.log", "Path to log file")
+        
+        if err := fs.Parse(args[1:]); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">if err := initLogger(logPath); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">config, err := loadConfig(configPath)
+        if err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("error loading config: %w", err)
+        }</span>
+
+        // Create context that listens for the interrupt signal from the OS.
+        <span class="cov8" title="1">ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+        defer stop()
+
+        if err := Run(ctx, config, DefaultFetcher); err != nil </span><span class="cov8" title="1">{
+                // If the context was canceled, it's a normal shutdown, not an error
+                if !errors.Is(ctx.Err(), context.Canceled) </span><span class="cov8" title="1">{
+                        return err
+                }</span>
+        }
+        <span class="cov0" title="0">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package main
+
+import (
+        "os"
+        "time"
+
+        "github.com/blang/semver"
+        "github.com/rhysd/go-github-selfupdate/selfupdate"
+)
+
+// version is injected by ldflags
+var version = "dev"
+
+var (
+        detectLatest = selfupdate.DetectLatest
+        updateTo     = selfupdate.UpdateTo
+        osExit       = os.Exit
+        osExecutable = os.Executable
+)
+
+// startUpdateScheduler starts the auto-update check loop.
+// It returns a stop function to cancel the scheduler (useful for testing or graceful shutdown).
+func startUpdateScheduler(config *Config) func() <span class="cov8" title="1">{
+        if !config.AutoUpdate.Enabled </span><span class="cov8" title="1">{
+                logger.Info("Auto-update disabled")
+                return func() </span>{<span class="cov8" title="1">}</span>
+        }
+
+        <span class="cov8" title="1">interval := config.AutoUpdate.CheckInterval
+        if interval == 0 </span><span class="cov0" title="0">{
+                interval = 24 * time.Hour
+        }</span>
+
+        <span class="cov8" title="1">logger.Infof("Starting auto-update scheduler. Interval: %s", interval)
+
+        // Create a channel to signal stop
+        stopChan := make(chan struct{})
+
+        // Run check immediately in background
+        go func() </span><span class="cov8" title="1">{
+                checkForUpdates()
+                ticker := time.NewTicker(interval)
+                defer ticker.Stop()
+
+                for </span><span class="cov8" title="1">{
+                        select </span>{
+                        case &lt;-ticker.C:<span class="cov0" title="0">
+                                checkForUpdates()</span>
+                        case &lt;-stopChan:<span class="cov8" title="1">
+                                return</span>
+                        }
+                }
+        }()
+
+        <span class="cov8" title="1">return func() </span><span class="cov8" title="1">{
+                close(stopChan)
+        }</span>
+}
+
+func checkForUpdates() <span class="cov8" title="1">{
+        logger.Info("Checking for updates...")
+        latest, found, err := detectLatest("Stoufiler/BwKeySync")
+        if err != nil </span><span class="cov8" title="1">{
+                logger.Errorf("Update check failed: %v", err)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if !found </span><span class="cov8" title="1">{
+                logger.Info("No updates found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">currentVersion, err := semver.ParseTolerant(version)
+        if err != nil </span><span class="cov8" title="1">{
+                logger.Warnf("Could not parse current version '%s': %v. Skipping update check.", version, err)
+                return
+        }</span>
+
+        <span class="cov8" title="1">if latest.Version.GT(currentVersion) </span><span class="cov8" title="1">{
+                logger.Infof("New version %s available (current: %s). Updating...", latest.Version, currentVersion)
+                
+                exe, err := osExecutable()
+                if err != nil </span><span class="cov8" title="1">{
+                        logger.Errorf("Could not locate executable path: %v", err)
+                        return
+                }</span>
+
+                <span class="cov8" title="1">if err := updateTo(latest.AssetURL, exe); err != nil </span><span class="cov8" title="1">{
+                        logger.Errorf("Update failed: %v", err)
+                        return
+                }</span>
+                <span class="cov8" title="1">logger.Infof("Successfully updated to %s. Restarting...", latest.Version)
+                osExit(0)</span> 
+        } else<span class="cov8" title="1"> {
+                logger.Info("Already running latest version")
+        }</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

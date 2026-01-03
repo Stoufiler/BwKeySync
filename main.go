@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,16 +30,21 @@ type Config struct {
 		AccessToken string `yaml:"access_token"`
 		ServerURL   string `yaml:"server_url"`
 	} `yaml:"bitwarden"`
-	SSHUser  string        `yaml:"ssh_user"`
-	Interval time.Duration `yaml:"interval"`
+	SSHUser            string        `yaml:"ssh_user"`
+	AuthorizedKeysFile string        `yaml:"authorized_keys_file,omitempty"`
+	Interval           time.Duration `yaml:"interval"`
+	AutoUpdate         struct {
+		Enabled       bool          `yaml:"enabled"`
+		CheckInterval time.Duration `yaml:"check_interval"`
+	} `yaml:"auto_update"`
 }
 
 var logger = logrus.New()
 
-func initLogger(logPath string) {
+func initLogger(logPath string) error {
 	// Create log directory if needed
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		log.Fatalf("Failed to create log directory: %v", err)
+		return fmt.Errorf("failed to create log directory: %w", err)
 	}
 
 	// Configure log rotation
@@ -66,6 +72,8 @@ func initLogger(logPath string) {
 	logger.SetFormatter(&logrus.JSONFormatter{
 		TimestampFormat: "2006-01-02 15:04:05",
 	})
+	
+	return nil
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -86,8 +94,8 @@ func loadConfig(path string) (*Config, error) {
 	if config.Bitwarden.AccessToken == "" {
 		return nil, errors.New("bitwarden.access_token is required")
 	}
-	if config.SSHUser == "" {
-		return nil, errors.New("ssh_user is required")
+	if config.SSHUser == "" && config.AuthorizedKeysFile == "" {
+		return nil, errors.New("ssh_user or authorized_keys_file is required")
 	}
 	if config.Interval == 0 {
 		return nil, errors.New("interval must be greater than 0")
@@ -96,12 +104,49 @@ func loadConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
+// BitwardenClient defines the interface for Bitwarden operations
+type BitwardenClient interface {
+	AccessTokenLogin(accessToken string, stateFile *string) error
+	GetSecretValue(id string) (string, error)
+	Close()
+}
+
+// RealBitwardenClient wraps the SDK client
+type RealBitwardenClient struct {
+	client sdk.BitwardenClientInterface
+}
+
+func (c *RealBitwardenClient) AccessTokenLogin(accessToken string, stateFile *string) error {
+	return c.client.AccessTokenLogin(accessToken, stateFile)
+}
+
+func (c *RealBitwardenClient) GetSecretValue(id string) (string, error) {
+	resp, err := c.client.Secrets().Get(id)
+	if err != nil {
+		return "", err
+	}
+	return resp.Value, nil
+}
+
+func (c *RealBitwardenClient) Close() {
+	c.client.Close()
+}
+
+// ClientCreator allows mocking the client creation
+var NewBitwardenClient = func(apiURL, identityURL *string) (BitwardenClient, error) {
+	c, err := sdk.NewBitwardenClient(apiURL, identityURL)
+	if err != nil {
+		return nil, err
+	}
+	return &RealBitwardenClient{client: c}, nil
+}
+
 // fetchPublicKey fetches the public key from Bitwarden Secrets Manager using the SDK
 func fetchPublicKey(serverURL, secretID, accessToken string) (string, error) {
 	apiURL := serverURL + "/api"
 	identityURL := serverURL + "/identity"
 
-	bitwardenClient, err := sdk.NewBitwardenClient(&apiURL, &identityURL)
+	bitwardenClient, err := NewBitwardenClient(&apiURL, &identityURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to create Bitwarden client: %w", err)
 	}
@@ -114,17 +159,28 @@ func fetchPublicKey(serverURL, secretID, accessToken string) (string, error) {
 		return "", fmt.Errorf("failed to authenticate with Bitwarden: %w", err)
 	}
 
-	secret, err := bitwardenClient.Secrets().Get(secretID)
+	value, err := bitwardenClient.GetSecretValue(secretID)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch secret: %w", err)
 	}
 
-	key := strings.TrimSpace(secret.Value)
+	key := strings.TrimSpace(value)
 	if key == "" {
 		return "", errors.New("empty public key received")
 	}
 
 	return key, nil
+}
+
+// resolveAuthorizedKeysPath determines the path to the authorized_keys file
+func resolveAuthorizedKeysPath(config *Config) string {
+	if config.AuthorizedKeysFile != "" {
+		return config.AuthorizedKeysFile
+	}
+	if config.SSHUser == "root" {
+		return "/root/.ssh/authorized_keys"
+	}
+	return filepath.Join("/home", config.SSHUser, ".ssh", "authorized_keys")
 }
 
 // authorizedKeysPath returns the path to the authorized_keys file based on sshUser
@@ -239,20 +295,23 @@ func (e *SyncError) Error() string {
 	return fmt.Sprintf("[%d] %s: %v", e.Code, e.Message, e.Err)
 }
 
-func Run(config *Config) error {
-	initLogger("/var/log/bwkeysync.log")
+// KeyFetcher defines the function signature for fetching keys
+type KeyFetcher func(serverURL, secretID, accessToken string) (string, error)
+
+var DefaultFetcher KeyFetcher = fetchPublicKey
+
+func Run(ctx context.Context, config *Config, fetcher KeyFetcher) error {
 	logger.Info("Starting Bitwarden Key Sync")
 
 	logger.WithFields(logrus.Fields{
 		"interval": config.Interval.String(),
 	}).Info("Configuration loaded")
 
-	// Set up signal handling for graceful shutdown
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	// Start auto-update scheduler
+	_ = startUpdateScheduler(config)
 
 	// Run the first fetch immediately
-	if err := fetchAndUpdate(config); err != nil {
+	if err := fetchAndUpdate(config, fetcher); err != nil {
 		return err
 	}
 
@@ -263,10 +322,10 @@ func Run(config *Config) error {
 	for {
 		select {
 		case <-ticker.C:
-			if err := fetchAndUpdate(config); err != nil {
+			if err := fetchAndUpdate(config, fetcher); err != nil {
 				return err
 			}
-		case <-sigs:
+		case <-ctx.Done():
 			logger.Info("Shutting down")
 			return nil
 		}
@@ -274,23 +333,23 @@ func Run(config *Config) error {
 }
 
 // fetchAndUpdate retrieves the Bitwarden public key with retry logic and ensures it's present in authorized_keys.
-func fetchAndUpdate(config *Config) error {
+func fetchAndUpdate(config *Config, fetcher KeyFetcher) error {
 	secretID := config.Bitwarden.SecretID
 	token := config.Bitwarden.AccessToken
 	serverURL := config.Bitwarden.ServerURL
-	sshUser := config.SSHUser
+	// sshUser usage is replaced by resolveAuthorizedKeysPath logic
 
 	logger.WithFields(logrus.Fields{
 		"secretID":  secretID,
 		"serverURL": serverURL,
-		"sshUser":   sshUser,
+		"sshUser":   config.SSHUser,
 	}).Debug("Environment variables loaded")
 
 	var publicKey string
 	err := retry.Do(
 		func() error {
 			var err error
-			publicKey, err = fetchPublicKey(serverURL, secretID, token)
+			publicKey, err = fetcher(serverURL, secretID, token)
 			return err
 		},
 		retry.Attempts(3),
@@ -303,7 +362,7 @@ func fetchAndUpdate(config *Config) error {
 	}
 
 	logger.Debug("Public key fetched successfully")
-	authKeysPath := authorizedKeysPath(sshUser)
+	authKeysPath := resolveAuthorizedKeysPath(config)
 	logger.WithField("authKeysPath", authKeysPath).Debug("Authorized keys path resolved")
 
 	logger.Debug("Ensuring public key is present in authorized_keys")
@@ -316,18 +375,42 @@ func fetchAndUpdate(config *Config) error {
 }
 
 func main() {
-	var configPath string
-	var logPath string
-	flag.StringVar(&configPath, "config", "config.yaml", "Path to configuration file")
-	flag.StringVar(&logPath, "log-file", "/var/log/bwkeysync.log", "Path to log file")
-	flag.Parse()
-
-	initLogger(logPath)
-	config, err := loadConfig(configPath)
-	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
-	}
-	if err := Run(config); err != nil {
+	if err := runApp(os.Args); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runApp(args []string) error {
+	var configPath string
+	var logPath string
+	
+	// Use a FlagSet to avoid polluting global flags in tests
+	fs := flag.NewFlagSet("bwkeysync", flag.ContinueOnError)
+	fs.StringVar(&configPath, "config", "config.yaml", "Path to configuration file")
+	fs.StringVar(&logPath, "log-file", "/var/log/bwkeysync.log", "Path to log file")
+	
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	if err := initLogger(logPath); err != nil {
+		return err
+	}
+
+	config, err := loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("error loading config: %w", err)
+	}
+
+	// Create context that listens for the interrupt signal from the OS.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := Run(ctx, config, DefaultFetcher); err != nil {
+		// If the context was canceled, it's a normal shutdown, not an error
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			return err
+		}
+	}
+	return nil
 }

@@ -61,8 +61,16 @@ package: linux darwin
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR) $(RELEASE_DIR)
 
+# Detect OS
+OS := $(shell uname -s)
+
 test:
+ifeq ($(OS),Darwin)
+	go test -v -coverprofile=coverage.out ./... \
+		-ldflags "-extldflags '-lm -framework CoreFoundation -framework Security -framework SystemConfiguration'"
+else
 	go test -v -coverprofile=coverage.out ./...
+endif
 	go tool cover -html=coverage.out -o coverage.html
 
 lint:
