@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Go Release Binaries
-        uses: wangyoucao577/go-release-action@v1.53
+        uses: wangyoucao577/go-release-action@v1.55
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goversion: '1.25.5'
