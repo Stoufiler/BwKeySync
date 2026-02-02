@@ -59,7 +59,7 @@ jobs:
           md5sum "BwKeySync-${GOOS}-${GOARCH}" > "BwKeySync-${GOOS}-${GOARCH}.md5"
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             BwKeySync-${{ env.GOOS }}-${{ env.GOARCH }}
