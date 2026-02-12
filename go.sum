@@ -4,6 +4,7 @@ github.com/avast/retry-go v3.0.0+incompatible h1:4SOWQ7Qs+oroOTQOYnAHqelpCO0biHS
 github.com/avast/retry-go v3.0.0+incompatible/go.mod h1:XtSnn+n/sHqQIpZ10K1qAevBhOOCWBLXXy3hyiqqBrY=
 github.com/bitwarden/sdk-go v1.0.2 h1:krk5et4sfksLDDcrYHcs8f3jL/TGcQ1EShw4CG21JSI=
 github.com/bitwarden/sdk-go v1.0.2/go.mod h1:RuYh+gqffp3h8wNUVWz1bvp2Pho10AFz+WIlI26iWY4=
+github.com/bitwarden/sdk-go/v2 v2.0.0/go.mod h1:6Sfb4IdZ9tnggeFj8Ty4MLkWUyC2pNlFUoAZE0Dapfw=
 github.com/blang/semver v3.5.1+incompatible h1:cQNTCjp13qL8KC3Nbxr/y2Bqb63oX6wdnnjpJbkM4JQ=
 github.com/blang/semver v3.5.1+incompatible/go.mod h1:kRBLl5iJ+tD4TcOOxsy/0fnwebNt5EWlYSAyrTnjyyk=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

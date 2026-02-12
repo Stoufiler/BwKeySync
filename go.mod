@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/bitwarden/sdk-go v1.0.2
+	github.com/bitwarden/sdk-go/v2 v2.0.0
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/rhysd/go-github-selfupdate v1.2.3
